@@ -3,6 +3,8 @@ use clap::Parser;
 use futures::future;
 use futures::stream::{self, StreamExt};
 use indicatif::{ProgressBar, ProgressStyle};
+use rand::seq::SliceRandom;
+use rand::thread_rng;
 use reqwest::{Method, Url};
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
@@ -20,6 +22,9 @@ struct Cli {
 
     #[arg(short, long, default_value = "output")]
     output: String,
+
+    #[arg(short, long, default_value = "500")]
+    count: usize,
 }
 
 #[derive(Deserialize, Clone)]
@@ -37,16 +42,18 @@ async fn main() -> Result<()> {
     let args = Cli::parse();
     let data_path = args.data;
     let output_path = args.output;
+    let count = args.count;
 
     let data = tokio::fs::read(data_path).await?;
     let data = String::from_utf8(data)?;
-    let data: Vec<Row> = data
+    let mut data: Vec<Row> = data
         .lines()
         .map(|line| {
             let row: Row = serde_json::from_str(line).unwrap();
             row
         })
         .collect();
+    data.shuffle(&mut thread_rng());
 
     let client = Arc::new(reqwest::Client::new());
 
@@ -55,7 +62,7 @@ async fn main() -> Result<()> {
 
     let output_path = Arc::new(Path::new(&output_path).to_path_buf());
 
-    let bar = ProgressBar::new(data.len() as u64);
+    let bar = ProgressBar::new(count as u64);
     bar.set_style(ProgressStyle::with_template(
         "[{elapsed_precise}] {bar:50.cyan/blue} {pos:>7}/{len:7} {msg}",
     )?);
@@ -70,6 +77,7 @@ async fn main() -> Result<()> {
 
             future::ready(!exists)
         })
+        .take(count)
         .map(|row| {
             let cloned_client = client.clone();
 
@@ -88,7 +96,7 @@ async fn main() -> Result<()> {
                 Result::<_>::Ok((bytes, row))
             })
         })
-        .buffer_unordered(16)
+        .buffer_unordered(32)
         .map(|pair| pair?)
         .map(|pair| {
             tokio::task::spawn_blocking(move || {
