@@ -1030,6 +1030,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "763a5a8f45087d6bcea4222e7b72c291a054edf80e4ef6efd2a4979878c7bea3"
 dependencies = [
  "console",
+ "futures-core",
  "instant",
  "number_prefix",
  "portable-atomic",
@@ -1514,6 +1515,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "num_cpus"
+version = "1.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4161fcb6d602d4d2081af7c3a45852d875a03dd337a6bfdd6e06407b61342a43"
+dependencies = [
+ "hermit-abi",
+ "libc",
+]
+
+[[package]]
 name = "number_prefix"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1662,6 +1673,7 @@ dependencies = [
  "image 0.25.2",
  "indicatif",
  "mozjpeg",
+ "num_cpus",
  "photon-rs",
  "rand 0.8.5",
  "reqwest",

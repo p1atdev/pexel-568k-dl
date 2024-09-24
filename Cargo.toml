@@ -8,8 +8,9 @@ anyhow = "1.0.88"
 clap = { version = "4.5.17", features = ["derive"] }
 futures = "0.3.30"
 image = "0.25.2"
-indicatif = "0.17.8"
+indicatif = { version = "0.17.8", features = ["futures"] }
 mozjpeg = "0.10.10"
+num_cpus = "1.16.0"
 photon-rs = "0.3.2"
 rand = "0.8.5"
 reqwest = "0.12.7"

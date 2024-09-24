@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use futures::future;
 use futures::stream::{self, StreamExt};
+use futures::{future, TryStreamExt};
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::seq::SliceRandom;
 use rand::thread_rng;
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::ops::Deref;
 use std::path::Path;
 use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncWriteExt, BufWriter};
 
 const MAX_LENGTH: u32 = 2048;
 
@@ -55,6 +55,8 @@ async fn main() -> Result<()> {
         .collect();
     data.shuffle(&mut thread_rng());
 
+    println!("Found data with {} rows", data.len());
+
     let client = Arc::new(reqwest::Client::new());
 
     let output_path = Path::new(&output_path).to_path_buf();
@@ -64,11 +66,10 @@ async fn main() -> Result<()> {
 
     let bar = ProgressBar::new(count as u64);
     bar.set_style(ProgressStyle::with_template(
-        "[{elapsed_precise}] {bar:50.cyan/blue} {pos:>7}/{len:7} {msg}",
+        "[{elapsed_precise}] {bar:50.cyan/blue} {pos:>7}/{len:7} ({eta_precise}) {msg}",
     )?);
-    let shared_bar = Arc::new(tokio::sync::Mutex::new(bar));
 
-    futures::stream::iter(data)
+    bar.wrap_stream(futures::stream::iter(data))
         .filter(|row| {
             let id = row.id.clone();
             let image_path = output_path.join(id.to_string());
@@ -96,12 +97,10 @@ async fn main() -> Result<()> {
                 Result::<_>::Ok((bytes, row))
             })
         })
-        .buffer_unordered(32)
-        .map(|pair| pair?)
-        .map(|pair| {
-            tokio::task::spawn_blocking(move || {
+        .buffer_unordered(16)
+        .map_ok(|pair| {
+            tokio::task::spawn_blocking(|| {
                 let (bytes, row) = pair?;
-
                 let mut image = photon_rs::native::open_image_from_bytes(bytes.deref())
                     .context("Failed to open image")?;
 
@@ -128,14 +127,12 @@ async fn main() -> Result<()> {
                 Result::<_>::Ok((image, row))
             })
         })
-        .buffer_unordered(32)
-        .map(|pair| pair?)
-        .map(|pair| {
+        .try_buffer_unordered(num_cpus::get())
+        .map_ok(|pair| {
             let cloned_output_path = output_path.clone();
-            let bar = shared_bar.clone();
-
             tokio::spawn(async move {
                 let (image, row) = pair?;
+
                 let id = row.id.clone();
 
                 let image_path = cloned_output_path.join(id.to_string());
@@ -153,22 +150,20 @@ async fn main() -> Result<()> {
                 let mut caption_path = cloned_output_path.join(id.to_string());
                 caption_path.set_extension("txt");
 
-                let mut file = tokio::fs::File::create(caption_path)
-                    .await
-                    .context("Failed to create file")?;
+                let mut file = BufWriter::new(
+                    tokio::fs::File::create(caption_path)
+                        .await
+                        .context("Failed to create file")?,
+                );
                 file.write_all(caption.as_bytes()).await?;
-
-                bar.lock().await.inc(1);
 
                 Result::<_>::Ok(())
             })
         })
-        .buffer_unordered(32)
+        .try_buffer_unordered(num_cpus::get())
         .map(|task| task)
         .collect::<Vec<_>>()
         .await;
-
-    shared_bar.lock().await.finish();
 
     Ok(())
 }
