@@ -31,7 +31,7 @@ struct Cli {
 struct Row {
     id: u32,
     url: String,
-    // cogvlm: String,
+    cogvlm: String,
     internvl2: String,
     width: u32,
     height: u32,
@@ -75,8 +75,9 @@ async fn main() -> Result<()> {
             let image_path = output_path.join(id.to_string());
 
             let exists = image_path.with_extension("jpg").exists();
+            let empty_caption = row.internvl2.trim().is_empty() && row.cogvlm.trim().is_empty();
 
-            future::ready(!exists)
+            future::ready(!exists && !empty_caption)
         })
         .take(count)
         .map(|row| {
@@ -97,7 +98,7 @@ async fn main() -> Result<()> {
                 Result::<_>::Ok((bytes, row))
             })
         })
-        .buffer_unordered(16)
+        .buffer_unordered(num_cpus::get())
         .map_ok(|pair| {
             tokio::task::spawn_blocking(|| {
                 let (bytes, row) = pair?;
@@ -124,19 +125,25 @@ async fn main() -> Result<()> {
                     );
                 }
 
-                Result::<_>::Ok((image, row))
+                let caption = match row.internvl2.trim().to_string() {
+                    s if s.is_empty() => row.cogvlm.trim().to_string(),
+                    s => s,
+                };
+
+                Result::<_>::Ok((image, caption, row))
             })
         })
         .try_buffer_unordered(num_cpus::get())
         .map_ok(|pair| {
             let cloned_output_path = output_path.clone();
             tokio::spawn(async move {
-                let (image, row) = pair?;
+                let (image, caption, row) = pair?;
 
-                let id = row.id.clone();
+                let id = row.id;
 
-                let image_path = cloned_output_path.join(id.to_string());
-                let image_path = image_path.with_extension("jpg");
+                let image_path = cloned_output_path
+                    .join(id.to_string())
+                    .with_extension("jpg");
 
                 let mut file = tokio::fs::File::create(image_path)
                     .await
@@ -145,25 +152,27 @@ async fn main() -> Result<()> {
 
                 file.write_all(&bytes).await?;
 
-                let caption = row.internvl2.clone();
-
-                let mut caption_path = cloned_output_path.join(id.to_string());
-                caption_path.set_extension("txt");
-
+                let caption_path = cloned_output_path
+                    .join(id.to_string())
+                    .with_extension("txt");
                 let mut file = BufWriter::new(
-                    tokio::fs::File::create(caption_path)
-                        .await
-                        .context("Failed to create file")?,
+                    tokio::fs::File::options()
+                        .create(true)
+                        .write(true)
+                        .truncate(true)
+                        .open(caption_path)
+                        .await?,
                 );
                 file.write_all(caption.as_bytes()).await?;
+                file.flush().await?;
 
                 Result::<_>::Ok(())
             })
         })
         .try_buffer_unordered(num_cpus::get())
         .map(|task| task)
-        .collect::<Vec<_>>()
-        .await;
+        .try_collect::<Vec<_>>()
+        .await?;
 
     Ok(())
 }
